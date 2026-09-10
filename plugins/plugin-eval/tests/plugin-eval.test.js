@@ -5,6 +5,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import test from "node:test";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import { analyzePath, explainBudget } from "../src/core/analyze.js";
 import { initializeBenchmark, runBenchmark } from "../src/core/benchmark.js";
@@ -17,7 +18,7 @@ import { formatCommandPath } from "../src/lib/files.js";
 import { renderPayload } from "../src/renderers/index.js";
 
 const execFileAsync = promisify(execFile);
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixturesRoot = path.join(repoRoot, "fixtures");
 const cliPath = path.join(repoRoot, "scripts", "plugin-eval.js");
 const nodeBin = process.execPath;
@@ -112,8 +113,44 @@ async function copyDirectory(source, destination) {
 
 async function createFakeCodexExecutable(rootPath) {
   const binDir = path.join(rootPath, "bin");
-  const executablePath = path.join(binDir, "codex");
+  const executablePath = path.join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
   await fs.mkdir(binDir, { recursive: true });
+  if (process.platform === "win32") {
+    const fakeCodexScript = path.join(binDir, "fake-codex.mjs");
+    await fs.writeFile(
+      fakeCodexScript,
+      `import fs from "node:fs";
+
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("codex-cli fake-test");
+  process.exit(0);
+}
+
+if (args[0] === "exec") {
+  const finalIndex = args.indexOf("--output-last-message");
+  const workspaceIndex = args.indexOf("--cd");
+  const finalPath = finalIndex >= 0 ? args[finalIndex + 1] : "";
+  const workspacePath = workspaceIndex >= 0 ? args[workspaceIndex + 1] : "";
+  fs.mkdirSync(workspacePath, { recursive: true });
+  fs.writeFileSync(finalPath, "Implemented benchmark fixture.\\n");
+  fs.writeFileSync(workspacePath + "\\\\generated.ts", "export const generated = 1;\\n");
+  fs.writeFileSync(workspacePath + "\\\\generated.test.ts", 'import { generated } from "./generated";\\nexport default generated;\\n');
+  process.stdout.write('{"type":"thread.started","thread_id":"thread-test"}\\n');
+  process.stdout.write('{"type":"tool.called","tool_name":"functions.exec_command"}\\n');
+  process.stdout.write('{"type":"shell.command","command":"npm test"}\\n');
+  process.stdout.write('{"type":"turn.completed","usage":{"input_tokens":120,"output_tokens":45,"total_tokens":165}}\\n');
+  process.exit(0);
+}
+
+console.error("unsupported invocation");
+process.exit(1);
+`,
+      "utf8",
+    );
+    await fs.writeFile(executablePath, `@echo off\r\nnode "%~dp0fake-codex.mjs" %*\r\n`, "utf8");
+    return executablePath;
+  }
   await fs.writeFile(
     executablePath,
     `#!/bin/sh

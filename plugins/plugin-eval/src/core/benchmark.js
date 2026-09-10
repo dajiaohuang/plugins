@@ -255,6 +255,7 @@ async function runProcessCapture({
   const child = spawn(command, args, {
     cwd,
     env,
+    shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command),
     stdio: ["ignore", "pipe", "pipe"],
   });
 
